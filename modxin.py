@@ -1,52 +1,58 @@
 import psutil
-import time
+import socket
 import tkinter as tk
 from tkinter import messagebox
 import os
 
-BLACKLIST = [
-    "Taskmgr.exe", 
-    "cmd.exe", 
-    "powershell.exe", 
-    "chrome.exe", 
-]
+# 設定
+LISTEN_IP = "0.0.0.0" # すべての接続を受け入れる
+LISTEN_PORT = 50005
+KILL_SWITCH = os.path.join(os.path.expanduser("~"), "Desktop", "stop.txt")
 
-KILL_SWITCH = os.path.join(os.path.expanduser("~"), "OneDrive\デスクトップ", "stop.txt")
-
-def show_error(app_name):
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes('-topmost', True)
-    messagebox.showerror(
-        "Windows システムの保護", 
-        f"システムエラー: {app_name} (0x80040154)\n{app_name}は「modxin」に感染しました。"
-    )
-    root.destroy()
-
-def check_and_kill():
+def kill_edge():
+    killed = False
     for proc in psutil.process_iter(['name']):
         try:
-            proc_name = proc.info['name']
-            if proc_name and proc_name.lower() in [name.lower() for name in BLACKLIST]:
+            if proc.info['name'] and proc.info['name'].lower() == "msedge.exe":
                 proc.kill()
-                show_error(proc_name)
+                killed = True
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
+    
+    if killed:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        messagebox.showerror("System Error", "リモート指令によりEdgeは終了されました。")
+        root.destroy()
 
 def main():
-    print(f"ブラックリスト監視中... 終了するにはデスクトップに {os.path.basename(KILL_SWITCH)} を作成してください。")
-    
+    # UDPソケットの作成
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((LISTEN_IP, LISTEN_PORT))
+    sock.settimeout(1.0) # 1秒ごとにループを回して安全装置をチェック
+
+    print(f"待機中... 終了するにはデスクトップに stop.txt を作成してください。")
+
     while True:
         if os.path.exists(KILL_SWITCH):
-            print("安全装置が作動しました。")
-            try:
-                os.remove(KILL_SWITCH)
-            except:
-                pass
+            try: os.remove(KILL_SWITCH)
+            except: pass
             break
-        
-        check_and_kill()
-        time.sleep(0.1)
+
+        try:
+            data, addr = sock.recvfrom(1024)
+            message = data.decode('utf-8')
+            
+            if message == "KILL_EDGE":
+                print(f"指令受信: {addr} からの命令を実行します。")
+                kill_edge()
+        except socket.timeout:
+            continue
+        except Exception as e:
+            print(f"エラー: {e}")
+
+    sock.close()
 
 if __name__ == "__main__":
     main()
